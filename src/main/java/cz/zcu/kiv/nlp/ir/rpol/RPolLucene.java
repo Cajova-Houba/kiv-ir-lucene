@@ -3,11 +3,9 @@ package cz.zcu.kiv.nlp.ir.rpol;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.CharArraySet;
+import org.apache.lucene.analysis.core.SimpleAnalyzer;
 import org.apache.lucene.analysis.en.EnglishAnalyzer;
-import org.apache.lucene.document.Document;
-import org.apache.lucene.document.Field;
-import org.apache.lucene.document.StringField;
-import org.apache.lucene.document.TextField;
+import org.apache.lucene.document.*;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
@@ -33,8 +31,12 @@ public class RPolLucene {
     private static final String SOURCE_JSON = "rpol-comments.json";
 
     private static final int HITS_PER_PAGE = 10;
-    private static final int MAX_RESULTS = 100;
+    private static final int MAX_RESULTS = 20;
 
+    /**
+     * Query comments by this user.
+     */
+    private static final String USERNAME = "letdogsvote";
 
     public static void main(String[] args) throws IOException, ParseException {
         // 0. Specify the analyzer for tokenizing text.
@@ -83,15 +85,17 @@ public class RPolLucene {
         int hitsPerPage = HITS_PER_PAGE;
         IndexSearcher searcher = new IndexSearcher(reader);
         int page = 0;
-        TopDocs docs = performQueryPage(query, searcher, hitsPerPage, page);
+        ScoreDoc lastDoc = null;
+        TopDocs docs = performQueryPage(query, searcher, hitsPerPage, page, lastDoc);
         ScoreDoc[] hits = docs.scoreDocs;
 
         while(hits.length > 0) {
+            lastDoc = hits[hits.length-1];
             System.out.println("Page "+(page+1)+"\n"+hits.length+" hits.\n=======================");
             printPage(page, hits, searcher);
 
             page++;
-            docs = performQueryPage(query, searcher, hitsPerPage, page);
+            docs = performQueryPage(query, searcher, hitsPerPage, page, lastDoc);
             hits = docs.scoreDocs;
             System.out.println("=======================\n");
         }
@@ -102,12 +106,17 @@ public class RPolLucene {
         for(int i=0;i<hits.length;++i) {
             int docId = hits[i].doc;
             Document d = searcher.doc(docId);
-            System.out.println((i+1)+": \nusername: "+d.get("username")+"\ntext: "+d.get("text")+"\nscore: "+d.get("score"));
+            System.out.println((i+1)+": \nusername: "+d.get("username")+"\ntext: "+d.get("text")+"\nLucene score: "+hits[i].score+"\nReddit score: "+d.get("score"));
         }
     }
 
-    private static TopDocs performQueryPage(Query q, IndexSearcher searcher, int hitsPerPage, int page) throws IOException {
-        TopScoreDocCollector collector = TopScoreDocCollector.create(MAX_RESULTS);
+    private static TopDocs performQueryPage(Query q, IndexSearcher searcher, int hitsPerPage, int page, ScoreDoc lastDoc) throws IOException {
+        TopScoreDocCollector collector;
+        if (lastDoc != null) {
+            collector = TopScoreDocCollector.create(MAX_RESULTS, lastDoc);
+        } else {
+            collector = TopScoreDocCollector.create(MAX_RESULTS);
+        }
 
         searcher.search(q, collector);
 
@@ -124,6 +133,8 @@ public class RPolLucene {
         queries.put("Trump impeachment", new QueryParser("text", analyzer).parse("\"Trump impeachment\"~5"));
         queries.put("Russia and elections", new QueryParser("text", analyzer).parse("(\"Trump\" OR \"Russia\") AND \"elections\""));
         queries.put("China trade war", new QueryParser("text", analyzer).parse("(\"China\" OR \"USA\") AND (\"tradewar\" OR \"trade war\")"));
+        queries.put("Comments by "+USERNAME, new QueryParser("username", new SimpleAnalyzer()).parse(USERNAME));
+        queries.put("Comments with (reddit) score between 100 and 500", LongPoint.newRangeQuery("score-long", 100  , 500));
         return queries;
     }
 
@@ -147,9 +158,12 @@ public class RPolLucene {
         System.out.println("Indexing "+comments.size()+" comments.");
         for(Comment comment : comments) {
             Document doc = new Document();
-            doc.add(new StringField("username", comment.getUsername(), Field.Store.YES));
+            doc.add(new TextField("username", comment.getUsername(), Field.Store.YES));
             doc.add(new TextField("text", comment.getText(), Field.Store.YES));
-            doc.add(new StringField("score", Integer.toString(comment.getScore()), Field.Store.YES));
+
+            // one field for querying by score, one field for storing the score
+            doc.add(new LongPoint("score-long", comment.getScore()));
+            doc.add(new StoredField("score", comment.getScore()));
             doc.add(new StringField("timestamp", comment.getTimestamp(), Field.Store.YES));
             w.addDocument(doc);
         }
