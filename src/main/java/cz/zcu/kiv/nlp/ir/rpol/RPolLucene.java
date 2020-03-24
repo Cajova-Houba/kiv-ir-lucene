@@ -107,7 +107,7 @@ public class RPolLucene {
     }
 
     private static TopDocs performQueryPage(Query q, IndexSearcher searcher, int hitsPerPage, int page) throws IOException {
-        TopScoreDocCollector collector = TopScoreDocCollector.create(MAX_RESULTS, MAX_RESULTS);
+        TopScoreDocCollector collector = TopScoreDocCollector.create(MAX_RESULTS);
 
         searcher.search(q, collector);
 
